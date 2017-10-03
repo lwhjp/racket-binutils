@@ -5,9 +5,12 @@
 
 (provide
  (contract-out
-  [elf->bin:object (-> (is-a?/c elf%) bin:object?)]))
+  [elf->bin:object (-> (is-a?/c elf%) bin:object?)]
+  [bin:object->elf (-> bin:object? (is-a?/c elf%))]))
 
-(require "../../base.rkt"
+(require racket/list
+         racket/vector
+         "../../base.rkt"
          "elf.rkt")
 
 (define (elf->bin:object elf)
@@ -74,3 +77,114 @@
       (and (is-a? section elf:section:bits%) (get-field data section))
       (section-symbols section-idx)
       (section-relocations section-idx)))))
+
+(define (bin:object->elf obj)
+  (define strings (new elf:section:string-table%))
+  (set-field! data strings #"\0")
+  (define (make-name bstr) (send strings add-string! bstr))
+  (define-values (global-symbols local-symbols)
+    (partition
+     (λ (sym) (eq? 'global (get-field binding sym)))
+     (for/list ([section-idx (in-naturals 1)]
+                [section (in-list (bin:object-sections obj))]
+                #:when #t
+                [symbol (in-list (bin:section-symbols section))])
+       (define esym (new elf:symbol%))
+       (set-field! name-index esym (make-name (string->bytes/latin-1 (symbol->string (bin:symbol-name symbol)))))
+       (set-field! type esym (or (bin:symbol-type symbol) 'none))
+       (set-field! binding esym (bin:symbol-binding symbol))
+       (set-field! section-index esym section-idx)
+       (set-field! value esym (bin:symbol-value symbol))
+       (set-field! size esym (or (bin:symbol-size symbol) 0))
+       esym)))
+  (define symbols
+    (list->vector
+     (append
+      (let ()
+        ; Null symbol
+        (define esym (new elf:symbol%))
+        (set-field! name-index esym 0)
+        (set-field! type esym 'none)
+        (set-field! binding esym 'local)
+        (set-field! section-index esym 0)
+        (list esym))
+      ; omit file & section symbols
+      local-symbols
+      global-symbols)))
+  (define symbol-idx-map
+    (for/hasheq ([sym (in-vector symbols)]
+                 [idx (in-naturals)])
+      (values (string->symbol
+               (bytes->string/latin-1
+                (send strings get-string (get-field name-index sym))))
+              idx)))
+  (define null-sections
+    (vector
+     (let ()
+       (define esec (new elf:section:null%))
+       (define ehdr (new elf:section-header%))
+       (set-field! name-index ehdr 0)
+       (set-field! type ehdr 'null)
+       (set-field! header esec ehdr)
+       esec)))
+  (define prog-sections
+    (for/vector ([section (in-list (bin:object-sections obj))])
+      (define esec (new elf:section:bits%))
+      (define ehdr (new elf:section-header%))
+      (set-field! name-index ehdr (make-name (bin:section-name section)))
+      (set-field! type ehdr 'program-bits)
+      (set-field! flags ehdr (append '(allocate)
+                                     (if (bin:section-writable? section) '(write) '())
+                                     (if (bin:section-executable? section) '(execute) '())))
+      (set-field! header esec ehdr)
+      (set-field! data esec (bin:section-data section))
+      esec))
+  (define strtab-idx (+ (vector-length prog-sections) 1))
+  (define strtab+symtab
+    (vector
+     (let ()
+       (define ehdr (new elf:section-header%))
+       (set-field! name-index ehdr (make-name #".strtab"))
+       (set-field! type ehdr 'string-table)
+       (set-field! header strings ehdr)
+       strings)
+     (let ()
+       (define esec (new elf:section:table%))
+       (define ehdr (new elf:section-header%))
+       (set-field! name-index ehdr (make-name #".symtab"))
+       (set-field! type ehdr 'symbol-table)
+       (set-field! link ehdr strtab-idx)
+       (set-field! info ehdr (- (vector-length symbols) (length global-symbols)))
+       (set-field! header esec ehdr)
+       (set-field! entries esec symbols)
+       esec)))
+  (define reltabs
+    (for/vector ([section-idx (in-naturals 1)]
+                 [section (in-list (bin:object-sections obj))]
+                 #:unless (null? (bin:section-relocations section)))
+      (define relocations
+        (for/vector ([rel (in-list (bin:section-relocations section))])
+          (define sym-idx (hash-ref symbol-idx-map (bin:relocation-symbol rel)))
+          (define erel (new elf:relocation-with-addend%))
+          (set-field! offset erel (bin:relocation-offset rel))
+          (set-field! symbol-table-index erel sym-idx)
+          (set-field! type erel 1) ; TODO: type (currently assuming absolute)
+          (set-field! addend erel (bin:relocation-addend rel))
+          erel))
+      (define esec (new elf:section:table%))
+      (define ehdr (new elf:section-header%))
+      (set-field! name-index ehdr (make-name (bytes-append #".rela" (bin:section-name section))))
+      (set-field! type ehdr 'relocations-with-addend)
+      (set-field! link ehdr (add1 strtab-idx))
+      (set-field! info ehdr section-idx)
+      (set-field! header esec ehdr)
+      (set-field! entries esec relocations)
+      esec))
+  (define elf (new elf%))
+  (define ehdr (new elf:header%))
+  (set-field! type ehdr 'relocatable)
+  (set-field! string-table-index ehdr strtab-idx)
+  (set-field! header elf ehdr)
+  (set-field! sections elf (vector-append null-sections prog-sections strtab+symtab reltabs))
+  (send elf repack!)
+  elf)

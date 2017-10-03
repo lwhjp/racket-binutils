@@ -66,13 +66,14 @@
           signed?
           (current-elf-big-endian?)))
        (λ (out v)
-         (write-bytes
-          (integer->integer-bytes
-           v
-           (current-size)
-           signed?
-           (current-elf-big-endian?))
-          out))))
+         (void
+          (write-bytes
+           (integer->integer-bytes
+            v
+            (current-size)
+            signed?
+            (current-elf-big-endian?))
+           out)))))
     '(#f #f #f #f #t #f #t)
     '( 4  4  2  4  4  4  4)    ; elf32
     '( 8  8  2  4  4  8  8)))) ; elf64

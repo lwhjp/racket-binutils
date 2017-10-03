@@ -55,7 +55,70 @@
                            in)))
         this))
     (define/public (write out)
-      (error "TODO"))
+      (define ident (make-bytes 16))
+      (bytes-copy! ident 0 elf-magic)
+      (bytes-set! ident 4 (case class
+                            [(elf32) 1]
+                            [(elf64) 2]))
+      (bytes-set! ident 5 (if big-endian? 2 1))
+      (bytes-set! ident 6 1)
+      (write-bytes ident out)
+      (parameterize ([current-elf-class class]
+                     [current-elf-big-endian? big-endian?])
+        (write-value elf:header% out header)
+        (write-value (ref (get-field program-header-offset header)
+                          (array elf:program-header%
+                                 (get-field program-header-count header)
+                                 #:element-size (get-field program-header-size header)))
+                     out
+                     program-headers)
+        (write-value (ref (get-field section-header-offset header)
+                          (array elf:section-header%
+                                 (get-field section-header-count header)
+                                 #:element-size (get-field section-header-size header)))
+                     out
+                     (vector-map (λ (s) (get-field header s)) sections))
+        (for ([section (in-vector sections)])
+          (define section-header (get-field header section))
+          (write-value (ref (get-field offset section-header) elf:section%) out section))))
+    (define/public (set-defaults!)
+      (send header set-defaults!)
+      (for ([phdr (in-vector program-headers)]) (send phdr set-defaults!))
+      (for ([section (in-vector sections)])
+        (send (get-field header section) set-defaults!)
+        (send section set-defaults!)))
+    (define/public (repack!)
+      (set-defaults!)
+      (define program-header-offset (get-field elf-header-size header))
+      (define program-header-count (vector-length program-headers))
+      (set-field! program-header-offset header (if (zero? program-header-count) 0 program-header-offset))
+      (set-field! program-header-count header (vector-length program-headers))
+      ; TODO: program header offsets
+      (define section-header-offset (+ program-header-offset
+                                       (* (get-field program-header-size header)
+                                          program-header-count)))
+      (set-field! section-header-offset header section-header-offset)
+      (set-field! section-header-count header (vector-length sections))
+      (define sections-offset (+ section-header-offset
+                                 (* (get-field section-header-size header)
+                                    (get-field section-header-count header))))
+      (for/fold ([offset sections-offset])
+                ([section (in-vector sections)])
+        (define shdr (get-field header section))
+        (define section-offset
+          (bitwise-and
+           (+ offset (sub1 (get-field alignment shdr)))
+           (bitwise-not (sub1 (get-field alignment shdr)))))
+        (define size
+          (cond
+            [(is-a? section elf:section:bits%) (bytes-length (get-field data section))]
+            [(is-a? section elf:section:table%) (* (get-field entry-size shdr)
+                                                   (vector-length (get-field entries section)))]
+            [else 0]))
+        (set-field! offset shdr section-offset)
+        (set-field! size shdr size)
+        (+ section-offset size))
+      (void))
     (inspect #f)))
 
 (define-binary-class elf:header%
@@ -76,6 +139,14 @@
    [section-header-size   elf-half]
    [section-header-count  elf-half]
    [string-table-index    elf-half])
+  (define/public (set-defaults!)
+    (set! machine (or machine (case (current-elf-class) [(elf32) 3] [(elf64) 62] [else 0])))
+    (set! version (or version 1))
+    (set! entry (or entry 0))
+    (set! flags (or flags 0))
+    (set! elf-header-size (or elf-header-size 64))
+    (set! program-header-size (or program-header-size 56))
+    (set! section-header-size (or section-header-size 64)))
   (inspect #f))
 
 (define-binary-class elf:program-header%
@@ -103,6 +174,9 @@
    [file-size        elf-xword]
    [memory-size      elf-xword]
    [alignment        elf-xword])
+  (define/public (set-defaults!)
+    ; TODO
+    (void))
   (inspect #f))
 
 (define-binary-class elf:section-header%
@@ -129,6 +203,17 @@
    [info       elf-word]
    [alignment  elf-xword]
    [entry-size elf-xword])
+  (define/public (set-defaults!)
+    (set! flags (or flags '()))
+    (set! address (or address 0))
+    (set! link (or link 0))
+    (set! info (or info 0))
+    (set! alignment (or alignment 16))
+    (set! entry-size (or entry-size
+                         (case type
+                           [(symbol-table) 24]
+                           [(relocations-with-addend) 24]
+                           [else 0]))))
   (inspect #f))
 
 (define-binary-class elf:section%
@@ -144,11 +229,14 @@
 
 (define-binary-class elf:section:null% elf:section%
   ()
+  (define/public (set-defaults!) (void))
   (inspect #f))
 
 (define-binary-class elf:section:bits% elf:section%
   ([data (bytestring (get-field size header))])
   (inherit-field header)
+  (define/public (set-defaults!)
+    (unless data (set! data #"")))
   (inspect #f))
 
 (define-binary-class elf:section:table% elf:section%
@@ -165,6 +253,9 @@
                (λ (out v)
                  (write-value (array entry-type #f) out v))))])
   (inherit-field header)
+  (define/public (set-defaults!)
+    (unless entries (set! entries #[]))
+    (for ([entry (in-vector entries)]) (send entry set-defaults!)))
   (inspect #f))
 
 (define-binary-class elf:section:string-table% elf:section:bits%
@@ -224,8 +315,34 @@
          (set! size (read-value elf-xword in))]
         [else (error 'elf:symbol "unsupported ELF class: ~a" (current-elf-class))])
       this)
-    (define/public (write out v)
-      (error "TODO"))
+    (define/public (write out)
+      (case (current-elf-class)
+        [(elf64)
+         (write-value elf-word out name-index)
+         (write-value u1 out
+                      (bitwise-ior
+                       (case binding
+                         [(local) #x00]
+                         [(global) #x10]
+                         [(weak) #x20]
+                         [else (arithmetic-shift binding 4)])
+                       (case type
+                         [(none) 0]
+                         [(object) 1]
+                         [(function) 2]
+                         [(section) 3]
+                         [(file) 4]
+                         [else type])))
+         (write-value u1 out other)
+         (write-value elf-half out
+                      (case section-index
+                        [(absolute) #xFFF1]
+                        [(common) #xFFF2]
+                        [else section-index]))
+         (write-value elf-addr out value)
+         (write-value elf-xword out size)]
+        [else (error "TODO")]))
+    (define/public (set-defaults!) (void))
     (inspect #f)))
 
 (define-binary-class elf:relocation%
@@ -241,6 +358,7 @@
                                               (bitwise-ior
                                                (arithmetic-shift v1 32)
                                                v2))))])
+  (define/public (set-defaults!) (void))
   (inspect #f))
 
 (define-binary-class elf:relocation-with-addend% elf:relocation%
