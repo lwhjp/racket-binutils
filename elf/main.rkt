@@ -5,6 +5,7 @@
 
 (provide
  (all-from-out
+  "private/convert.rkt"
   "private/elf.rkt"
   "private/params.rkt"
   "private/system.rkt")
@@ -13,6 +14,7 @@
   [write-elf (->* ((is-a?/c elf%)) (output-port?) void?)]))
 
 (require binary-class
+         "private/convert.rkt"
          "private/elf.rkt"
          "private/params.rkt"
          "private/system.rkt")

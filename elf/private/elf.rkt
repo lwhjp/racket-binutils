@@ -201,17 +201,18 @@
          (let* ([info (read-value u1 in)]
                 [hi (arithmetic-shift info -4)]
                 [lo (bitwise-and #x0F info)])
-           (set! type (case lo
-                        [(0) 'local]
-                        [(1) 'global]
-                        [(2) 'weak]
-                        [else lo]))
            (set! binding (case hi
-                           [(0) 'none]
-                           [(1) 'object]
-                           [(2) 'function]
-                           [(3) 'symbol]
-                           [else hi])))
+                           [(0) 'local]
+                           [(1) 'global]
+                           [(2) 'weak]
+                           [else hi]))
+           (set! type (case lo
+                        [(0) 'none]
+                        [(1) 'object]
+                        [(2) 'function]
+                        [(3) 'section]
+                        [(4) 'file]
+                        [else lo])))
          (set! other (read-value u1 in))
          (set! section-index
                (let ([v (read-value elf-half in)])
