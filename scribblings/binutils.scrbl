@@ -5,7 +5,8 @@
                      racket/port
                      binary-class
                      binutils
-                     binutils/elf))
+                     binutils/elf
+                     (only-in ffi/unsafe cpointer? cast)))
 
 @title{Racket Binutils}
 
@@ -47,6 +48,32 @@ This package is not stable, and is likely to break compatibility in the future.
             [type (one-of/c 'address 'offset 'value 'size)]
             [addend exact-integer?])]{
   Represents a relocation.
+}
+
+@section{Linking}
+
+@defproc[(link-object/local/relative [obj bin:object?]) bin:object?]{
+  Resolves local relative references in @racket[obj].
+}
+
+@section{Dynamic Loading}
+
+@bold{This is unsafe (particularly if there are bugs, which is
+likely) - it could cause crashes or worse!}
+
+@definterface[dynamic-object<%> ()]{
+  Represents an object which has been loaded into memory.
+  @defmethod[(symbols) (listof symbol?)]{
+    Returns a list of symbols exported by the object.
+  }
+  @defmethod[(symbol-ref [name symbol?]) cpointer?]{
+    Returns a pointer to the requested symbol. This may be
+    @racket[cast] into a function type.
+  }
+}
+
+@defproc[(load-object [obj bin:object?]) (is-a?/c dynamic-object<%>)]{
+  Loads @racket[obj] into memory.
 }
 
 @section{ELF Support}
