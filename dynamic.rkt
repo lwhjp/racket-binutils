@@ -122,8 +122,12 @@
        (ffi:memcpy (ffi:ptr-add section-ptr offset) bstr (bytes-length bstr)))))
   (values section-ptrs free-procs globals references))
 
-(define malloc-code
-  (ffi:get-ffi-obj 'scheme_malloc_code #f (ffi:_fun ffi:_size ffi:-> ffi:_pointer)))
-
-(define free-code
-  (ffi:get-ffi-obj 'scheme_free_code #f (ffi:_fun ffi:_pointer ffi:-> ffi:_void)))
+(define-values (malloc-code free-code)
+  (if (eq? 'racket (system-type 'vm))
+      (values
+       (ffi:get-ffi-obj 'scheme_malloc_code #f (ffi:_fun ffi:_size ffi:-> ffi:_pointer))
+       (ffi:get-ffi-obj 'scheme_free_code #f (ffi:_fun ffi:_pointer ffi:-> ffi:_void)))
+      ; TODO
+      (values
+       (λ (_) (error "dynamic loading is not implemented on this version of Racket"))
+       void)))
