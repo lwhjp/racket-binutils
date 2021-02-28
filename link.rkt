@@ -24,7 +24,7 @@
             (define offset (bin:relocation-offset rel))
             (define rel-v
               (case (bin:relocation-type rel)
-                [(relative) (- sym-v (+ base offset))]
+                [(offset) (- sym-v (+ base offset))]
                 [else sym-v]))
             (write! offset (integer->integer-bytes
                             (+ rel-v (bin:relocation-addend rel))
@@ -36,15 +36,14 @@
       [else (cons (car rels) (loop (cdr rels)))])))
 
 (define (link-object/local/relative obj)
-  (define symbols
-    (for*/hasheq ([section (in-list (bin:object-sections obj))]
-                  [s (in-list (bin:section-symbols section))]
-                  #:when (bin:symbol-binding s))
-      (values (bin:symbol-name s) (bin:symbol-value s))))
   (bin:object
    (for/list ([section (in-list (bin:object-sections obj))])
+     (define symbols
+       (for/hasheq ([s (in-list (bin:section-symbols section))]
+                    #:when (bin:symbol-binding s))
+         (values (bin:symbol-name s) (bin:symbol-value s))))
      (define-values (relative absolute)
-       (partition (λ (r) (eq? 'relative (bin:relocation-type r)))
+       (partition (λ (r) (eq? 'offset (bin:relocation-type r)))
                   (bin:section-relocations section)))
      (define text
        (bytes-copy (bin:section-data section)))

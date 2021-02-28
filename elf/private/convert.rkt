@@ -11,7 +11,8 @@
 (require racket/list
          racket/vector
          "../../base.rkt"
-         "elf.rkt")
+         "elf.rkt"
+         "params.rkt")
 
 (define (elf->bin:object elf)
   (define (get-name idx [strtab-idx (get-field string-table-index (get-field header elf))])
@@ -60,9 +61,12 @@
                 [rel (in-vector (get-field entries reltab))])
       (bin:relocation
        (get-field offset rel)
-       #f ; TODO: size
+       ; TODO: arch-specific size helper
+       (if (and (eq? 'elf64 (current-elf-class)) (eqv? 1 (get-field type rel))) 8 4)
        (get-symbol-name/idx (get-field symbol-table-index rel) (get-field link reltab-hdr))
-       #f ; TODO: type
+       (case (get-field type rel)
+         [(1) 'value]
+         [(2) 'offset])
        (if (is-a? rel elf:relocation-with-addend%) (get-field addend rel) 0))))
   (bin:object
    (for/list ([section-idx (in-naturals)]
@@ -168,7 +172,10 @@
           (define erel (new elf:relocation-with-addend%))
           (set-field! offset erel (bin:relocation-offset rel))
           (set-field! symbol-table-index erel sym-idx)
-          (set-field! type erel 1) ; TODO: type (currently assuming absolute)
+          ; TODO: arch-specific type helper
+          (set-field! type erel (case (bin:relocation-type rel)
+                                  [(value) 1]
+                                  [(offset) 2]))
           (set-field! addend erel (bin:relocation-addend rel))
           erel))
       (define esec (new elf:section:table%))
